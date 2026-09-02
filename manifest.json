@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "id": "esegnorelli.rewind",
+  "name": "Rewind",
+  "version": "1.0.0",
+  "author": "Esegnorelli",
+  "license": "MIT",
+  "description": "Undo for Omarchy config. An agent breaks the bar, one click puts it back.",
+  "homepage": "https://github.com/Esegnorelli/omarchy-rewind",
+  "repository": "https://github.com/Esegnorelli/omarchy-rewind",
+  "keywords": [
+    "undo",
+    "config",
+    "hyprland",
+    "agents",
+    "timeline"
+  ],
+  "kinds": [
+    "service",
+    "bar-widget",
+    "overlay"
+  ],
+  "keepLoaded": false,
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml",
+    "overlay": "Overlay.qml"
+  },
+  "barWidget": {
+    "displayName": "Rewind",
+    "description": "Undo the last config change",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

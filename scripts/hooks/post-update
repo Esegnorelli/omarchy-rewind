@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+mkdir -p "${XDG_STATE_HOME:-$HOME/.local/state}/omarchy"
+printf 'update\n' > "${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/rewind-tag"

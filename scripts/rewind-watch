@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+RECORD="$ROOT/scripts/rewind-record"
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy"
+LIST="$STATE/rewind-pending.txt"
+ERR="$STATE/rewind-error.log"
+HYPR="$HOME/.config/hypr"
+OMA="$HOME/.config/omarchy"
+GAP=12
+
+export PATH="${HOME}/.local/share/mise/shims:${HOME}/.local/bin:/usr/bin:${PATH}"
+
+mkdir -p "$STATE" "$HYPR" "$OMA"
+: > "$LIST"
+
+log() {
+  local msg
+  msg="$(date -Iseconds) $*"
+  logger --tag rewind "$msg" 2>/dev/null || true
+  echo "$msg" >> "$ERR"
+}
+
+install_hooks() {
+  local src dest
+  for name in theme-set post-update; do
+    src="$ROOT/scripts/hooks/$name"
+    dest="$HOME/.config/omarchy/hooks/${name}.d/rewind"
+    mkdir -p "$(dirname "$dest")"
+    if [[ ! -e $dest ]]; then
+      cp "$src" "$dest"
+      chmod +x "$dest"
+    fi
+  done
+}
+
+flush() {
+  if [[ ! -s $LIST ]]; then
+    return
+  fi
+  local tmp
+  tmp="$(mktemp)"
+  sort -u "$LIST" > "$tmp"
+  : > "$LIST"
+  if ! "$RECORD" record < "$tmp" >>"$ERR" 2>&1; then
+    log "record failed"
+  fi
+  rm -f "$tmp"
+}
+
+on_exit() {
+  flush
+  "$RECORD" recording 0 "Not recording" >/dev/null 2>&1 || true
+}
+
+trap on_exit EXIT
+trap 'kill $DEBOUNCE_PID 2>/dev/null || true' INT TERM
+
+install_hooks
+"$RECORD" recording 1 >/dev/null 2>&1 || true
+
+if ! command -v inotifywait >/dev/null; then
+  log "inotifywait not found"
+  "$RECORD" recording 0 "inotifywait not found" >/dev/null 2>&1 || true
+  exit 1
+fi
+
+DEBOUNCE_PID=""
+
+while IFS= read -r path; do
+  printf '%s\n' "$path" >> "$LIST"
+  if [[ -n $DEBOUNCE_PID ]] && kill -0 "$DEBOUNCE_PID" 2>/dev/null; then
+    kill "$DEBOUNCE_PID" 2>/dev/null || true
+    wait "$DEBOUNCE_PID" 2>/dev/null || true
+  fi
+  (
+    sleep "$GAP"
+    flush
+  ) &
+  DEBOUNCE_PID=$!
+done < <(inotifywait -m -r -e close_write,moved_to,create,delete --format '%w%f' "$HYPR" "$OMA" 2>/dev/null)
