@@ -185,6 +185,72 @@ assert("refuse does not crash", typeof refused.ok === "boolean")
 
 fs.rmSync(root, { recursive: true, force: true })
 
+var ev = M.parseHyprEvent("closewindow>>0x560bdcbe6460")
+assert("parse closewindow", ev.name === "closewindow" && ev.address === "0x560bdcbe6460")
+var evOpen = M.parseHyprEvent("openwindow>>0xabc,2,com.mitchellh.ghostty,casa: hdp")
+assert("parse openwindow class", evOpen.name === "openwindow" && evOpen.class === "com.mitchellh.ghostty")
+assert("parse openwindow title", evOpen.title === "casa: hdp" && evOpen.workspace === "2")
+assert("parse junk", M.parseHyprEvent("nope") === null)
+
+assert("skip empty class", M.shouldSkipWindow({ class: "" }) === true)
+assert("skip portal", M.shouldSkipWindow({ class: "xdg-desktop-portal-gtk" }) === true)
+assert("skip omarchy layer class", M.shouldSkipWindow({ class: "omarchy-bar" }) === true)
+assert("keep ghostty", M.shouldSkipWindow({ class: "com.mitchellh.ghostty" }) === false)
+
+var cmd = M.parseCmdline("ghostty\u0000--working-directory=/tmp\u0000")
+assert("parse cmdline", cmd[0] === "ghostty" && cmd[1] === "--working-directory=/tmp")
+assert("ghostty cwd flag", M.terminalCwdArgs("com.mitchellh.ghostty", "/tmp").join(" ") === "--working-directory=/tmp")
+assert("alacritty cwd flag", M.terminalCwdArgs("Alacritty", "/tmp").join(" ") === "--working-directory /tmp")
+assert("kitty cwd flag", M.terminalCwdArgs("kitty", "/tmp").join(" ") === "--directory /tmp")
+assert("foot cwd flag", M.terminalCwdArgs("foot", "/tmp").join(" ") === "-D /tmp")
+assert("firefox no cwd", M.terminalCwdArgs("firefox", "/tmp").length === 0)
+
+var wItem = {
+  kind: "window",
+  class: "com.mitchellh.ghostty",
+  title: "~",
+  cwd: "/home/you/proj",
+  workspace: 3,
+  cmdline: ["ghostty"],
+}
+assert("window label", M.windowLabel(wItem) === "Ghostty · proj")
+var spec = M.hyprExecSpec(wItem)
+assert("hypr workspace prefix", spec.indexOf("[workspace 3 silent]") === 0)
+assert("hypr has ghostty", spec.indexOf("ghostty") >= 0)
+assert("hypr has cwd", spec.indexOf("working-directory") >= 0)
+
+var stack = []
+stack = M.pushItem(stack, { kind: "window", label: "A", ts: 1 })
+stack = M.pushItem(stack, { kind: "config", label: "B", ts: 2 })
+assert("push newest first", stack[0].label === "B" && stack[1].label === "A")
+var popped = M.popItem(stack)
+assert("pop top", popped.item.label === "B" && popped.stack[0].label === "A")
+var many = []
+var i
+for (i = 0; i < 60; i++) many = M.pushItem(many, { kind: "window", label: String(i), ts: i })
+assert("cap 50", many.length === 50 && many[0].label === "59" && many[49].label === "10")
+var mixed = [
+  { kind: "window", label: "Ghostty · proj", class: "com.mitchellh.ghostty" },
+  { kind: "config", label: "shell.json", files: ["omarchy/shell.json"] },
+]
+assert("filter mixed window", M.filterPoints(mixed, "ghost").length === 1)
+assert("filter mixed config", M.filterPoints(mixed, "shell").length === 1)
+
+var bootA = "aaa"
+var bootB = "bbb"
+var saved = { bootId: bootA, items: [{ kind: "window", label: "X" }, { kind: "config", label: "Y" }] }
+var loadedSame = M.loadStack(saved, bootA)
+assert("same boot keeps stack", loadedSame.length === 2)
+var loadedNew = M.loadStack(saved, bootB)
+assert("new boot clears stack", loadedNew.length === 0)
+
+assert("superZ taken", M.superZTaken('o.bind("SUPER + Z", "other", "true")\n') === true)
+assert("superZ free", M.superZTaken("-- nothing\n") === false)
+assert("superZ ours not taken", M.superZTaken("-- esegnorelli.undo\no.bind(\"SUPER + Z\", \"Undo\", \"x\")\n") === false)
+var merged = M.mergeBinds("-- keep me\n")
+assert("merge adds marker", merged.indexOf("-- esegnorelli.undo") >= 0)
+assert("merge idempotent", M.mergeBinds(merged) === merged)
+
 if (fails) {
   console.log(fails + " failed")
   process.exit(1)

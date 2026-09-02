@@ -13,21 +13,19 @@ Item {
   property var shell: null
   property var manifest: null
   property bool opened: false
-  property var points: []
-  property bool recording: true
-  property string headerNote: ""
+  property var items: []
   property string filterText: ""
   property int selectedIndex: 0
   property int fileIndex: 0
   property string diffText: ""
   property bool confirmOpen: false
-  property bool restoring: false
   property string restoreError: ""
   property var swatches: []
 
   readonly property string home: Quickshell.env("HOME") || ""
   readonly property string stateHome: Quickshell.env("XDG_STATE_HOME") || (home + "/.local/state")
-  readonly property string statusPath: stateHome + "/omarchy/rewind-status.json"
+  readonly property string stackPath: stateHome + "/omarchy/undo-stack.json"
+  readonly property string undoPath: Qt.resolvedUrl("scripts/undo-now").toString().replace(/^file:\/\//, "")
   readonly property string recordPath: Qt.resolvedUrl("scripts/rewind-record").toString().replace(/^file:\/\//, "")
 
   property color background: Color.menu.background
@@ -42,17 +40,18 @@ Item {
   readonly property int cornerRadius: Style.cornerRadius
   property string fontFamily: Style.font.menuFamily
   property int contentMargin: Style.spacing.panelPadding
-  readonly property int cardWidth: Math.min(Style.space(1180), panel.width - Style.gapsOut * 2)
-  readonly property int cardHeight: Math.min(Style.space(720), panel.height - Style.gapsOut * 2)
-  readonly property int sidebarWidth: Math.min(Style.space(360), cardWidth * 0.34)
+  readonly property int cardWidth: Math.min(Style.space(1100), panel.width - Style.gapsOut * 2)
+  readonly property int cardHeight: Math.min(Style.space(680), panel.height - Style.gapsOut * 2)
+  readonly property int sidebarWidth: Math.min(Style.space(360), cardWidth * 0.36)
   readonly property int rowHeight: Math.max(Style.space(56), Style.font.body + Style.font.caption + Style.spacing.rowPaddingX * 2)
 
-  readonly property var visiblePoints: Model.filterPoints(root.points, root.filterText)
-  readonly property var selectedPoint: {
-    if (selectedIndex < 0 || selectedIndex >= visiblePoints.length) return null
-    return visiblePoints[selectedIndex]
+  readonly property var visibleItems: Model.filterPoints(root.items, root.filterText)
+  readonly property var selectedItem: {
+    if (selectedIndex < 0 || selectedIndex >= visibleItems.length) return null
+    return visibleItems[selectedIndex]
   }
-  readonly property var selectedFiles: selectedPoint && selectedPoint.files ? selectedPoint.files : []
+  readonly property bool selectedIsConfig: selectedItem && selectedItem.kind === "config"
+  readonly property var selectedFiles: selectedIsConfig && selectedItem.files ? selectedItem.files : []
   readonly property string selectedFile: {
     if (fileIndex < 0 || fileIndex >= selectedFiles.length) return ""
     return selectedFiles[fileIndex]
@@ -65,8 +64,7 @@ Item {
     root.fileIndex = 0
     root.confirmOpen = false
     root.restoreError = ""
-    root.diffText = ""
-    statusFile.reload()
+    stackFile.reload()
     Qt.callLater(function () { keyCatcher.forceActiveFocus() })
   }
 
@@ -75,16 +73,16 @@ Item {
     root.opened = false
   }
 
-  function applyStatus(raw) {
+  function applyStack(raw) {
     try {
       var s = JSON.parse(raw || "{}")
-      root.points = s.points || []
-      root.recording = s.recording !== false
-      root.headerNote = root.recording ? "" : "Not recording"
-      if (root.selectedIndex >= root.visiblePoints.length)
-        root.selectedIndex = Math.max(0, root.visiblePoints.length - 1)
+      root.items = s.items || []
+      if (root.selectedIndex >= root.visibleItems.length)
+        root.selectedIndex = Math.max(0, root.visibleItems.length - 1)
       root.refreshDetail()
-    } catch (e) {}
+    } catch (e) {
+      root.items = []
+    }
   }
 
   function setFilter(next) {
@@ -95,54 +93,50 @@ Item {
   }
 
   function movePoint(delta) {
-    if (visiblePoints.length === 0) return
-    var n = visiblePoints.length
+    if (visibleItems.length === 0) return
+    var n = visibleItems.length
     root.selectedIndex = (root.selectedIndex + delta + n) % n
     root.fileIndex = 0
     root.refreshDetail()
   }
 
-  function moveFile(delta) {
-    if (selectedFiles.length === 0) return
-    var n = selectedFiles.length
-    root.fileIndex = (root.fileIndex + delta + n) % n
-    root.refreshDetail()
+  function realIndex() {
+    if (!selectedItem) return -1
+    var i
+    for (i = 0; i < root.items.length; i++) {
+      if (root.items[i] === selectedItem) return i
+      if (root.items[i].ts === selectedItem.ts && root.items[i].label === selectedItem.label)
+        return i
+    }
+    return root.selectedIndex
   }
 
   function refreshDetail() {
     root.swatches = []
     root.diffText = ""
-    if (!selectedPoint || !selectedFile) return
-    if (String(selectedFile).indexOf("colors.toml") >= 0)
-      root.swatches = []
+    if (!selectedIsConfig || !selectedFile || !selectedItem.commitId) return
     if (!diffProc.running) {
-      diffProc.command = [root.recordPath, "diff", selectedPoint.id, selectedFile]
+      diffProc.command = [root.recordPath, "diff", selectedItem.commitId, selectedFile]
       diffProc.running = true
     }
   }
 
-  function requestRestore() {
-    if (!selectedPoint || root.restoring) return
-    root.confirmOpen = true
-  }
-
   function runRestore() {
-    if (!selectedPoint || restoreProc.running) return
-    root.restoring = true
-    root.restoreError = ""
-    restoreProc.command = [root.recordPath, "restore", selectedPoint.id]
-    restoreProc.running = true
+    var idx = realIndex()
+    if (idx < 0 || undoProc.running) return
+    undoProc.command = [root.undoPath, String(idx)]
+    undoProc.running = true
   }
 
   FileView {
-    id: statusFile
-    path: root.statusPath
+    id: stackFile
+    path: root.stackPath
     watchChanges: true
     atomicWrites: true
     printErrors: false
-    onLoaded: root.applyStatus(text())
+    onLoaded: root.applyStack(text())
     onFileChanged: reload()
-    onLoadFailed: root.points = []
+    onLoadFailed: root.items = []
   }
 
   Process {
@@ -159,27 +153,21 @@ Item {
   }
 
   Process {
-    id: restoreProc
+    id: undoProc
     command: []
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        root.restoring = false
         root.confirmOpen = false
         try {
           var r = JSON.parse(text || "{}")
-          if (r.ok === false) root.restoreError = r.error || "Restore failed"
+          if (r.ok === false && !r.empty) root.restoreError = r.error || "Undo failed"
           else root.restoreError = ""
         } catch (e) {
-          root.restoreError = text || "Restore failed"
+          root.restoreError = ""
         }
-        statusFile.reload()
+        stackFile.reload()
       }
-    }
-    onExited: function (code) {
-      root.restoring = false
-      if (code !== 0 && !root.restoreError)
-        root.restoreError = "Restore failed"
     }
   }
 
@@ -188,20 +176,13 @@ Item {
     visible: root.opened
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
-    WlrLayershell.namespace: "omarchy-rewind"
+    WlrLayershell.namespace: "omarchy-undo"
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
     exclusionMode: ExclusionMode.Ignore
 
-    Rectangle {
-      anchors.fill: parent
-      color: root.scrim
-    }
-
-    MouseArea {
-      anchors.fill: parent
-      onClicked: root.close()
-    }
+    Rectangle { anchors.fill: parent; color: root.scrim }
+    MouseArea { anchors.fill: parent; onClicked: root.close() }
 
     BorderSurface {
       id: card
@@ -212,7 +193,6 @@ Item {
       color: root.background
       borderSpec: root.borderSpec
       padding: root.contentMargin
-
       MouseArea { anchors.fill: parent; onClicked: {} }
 
       Item {
@@ -220,7 +200,6 @@ Item {
         anchors.fill: parent
         z: root.confirmOpen ? 20 : 0
         focus: true
-
         Keys.priority: Keys.BeforeItem
         Keys.onPressed: function (event) {
           if (root.confirmOpen) {
@@ -237,17 +216,8 @@ Item {
           } else if (event.key === Qt.Key_K || event.key === Qt.Key_Up) {
             root.movePoint(-1)
             event.accepted = true
-          } else if (event.key === Qt.Key_Right) {
-            root.moveFile(1)
-            event.accepted = true
-          } else if (event.key === Qt.Key_Left) {
-            root.moveFile(-1)
-            event.accepted = true
           } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-            root.requestRestore()
-            event.accepted = true
-          } else if (event.key === Qt.Key_Slash) {
-            root.setFilter("")
+            if (root.selectedItem) root.confirmOpen = true
             event.accepted = true
           } else if (Util.editsFilter(event, root.filterText)) {
             root.setFilter(Util.editedFilter(event, root.filterText))
@@ -263,14 +233,8 @@ Item {
           anchors.fill: parent
           opened: root.confirmOpen
           z: 10
-          message: root.selectedPoint
-            ? Model.confirmCopy({
-                count: (root.selectedPoint.files || []).length,
-                hhmm: Model.formatHhmm(root.selectedPoint.ts),
-                label: root.selectedPoint.label
-              })
-            : ""
-          confirmText: "Restore"
+          message: root.selectedItem ? ("Restore " + root.selectedItem.label + "?") : ""
+          confirmText: "Undo"
           background: root.background
           foreground: root.foreground
           scrim: root.scrim
@@ -295,21 +259,18 @@ Item {
           width: parent.width
           height: Math.max(Style.space(40), Style.font.heading + 8)
           color: "transparent"
-
           Text {
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
-            text: root.filterText ? root.filterText : (root.headerNote || "Rewind")
+            text: root.filterText ? root.filterText : "Undo"
             color: root.foreground
-            opacity: root.filterText || root.headerNote ? 1 : 0.9
             font.family: root.fontFamily
             font.pixelSize: Style.font.heading
           }
-
           Text {
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            text: root.restoreError || (root.restoring ? "Restoring…" : "j/k  Enter  Esc")
+            text: root.restoreError || "j/k  Enter  Esc"
             color: root.restoreError ? Color.urgent : root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
@@ -329,11 +290,9 @@ Item {
               width: root.sidebarWidth
               height: parent.height
               clip: true
-              model: root.visiblePoints
+              model: root.visibleItems
               spacing: Style.space(4)
               boundsBehavior: Flickable.StopAtBounds
-              currentIndex: root.selectedIndex
-
               delegate: Rectangle {
                 required property int index
                 required property var modelData
@@ -341,7 +300,6 @@ Item {
                 height: root.rowHeight
                 radius: root.cornerRadius
                 color: index === root.selectedIndex ? root.selectedBackground : "transparent"
-
                 MouseArea {
                   anchors.fill: parent
                   onClicked: {
@@ -350,62 +308,67 @@ Item {
                     root.refreshDetail()
                   }
                 }
-
                 Column {
                   anchors.fill: parent
                   anchors.margins: Style.space(10)
                   spacing: 2
-
                   Row {
                     spacing: Style.space(8)
                     Text {
-                      text: Model.formatHhmm(modelData.ts)
-                      color: index === root.selectedIndex ? root.selectedText : root.foreground
+                      text: modelData.kind === "config" ? "config" : "window"
+                      color: index === root.selectedIndex ? root.selectedText : root.accent
                       font.family: root.fontFamily
-                      font.pixelSize: Style.font.body
+                      font.pixelSize: Style.font.caption
                     }
                     Text {
-                      text: modelData.label
-                      color: index === root.selectedIndex ? root.selectedText : root.accent
+                      text: Model.formatHhmm(modelData.ts)
+                      color: index === root.selectedIndex ? root.selectedText : root.dim
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.caption
                     }
                   }
                   Text {
                     width: parent.width
-                    text: modelData.summary
-                    color: index === root.selectedIndex ? root.selectedText : root.dim
+                    text: modelData.label
+                    color: index === root.selectedIndex ? root.selectedText : root.foreground
                     font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
+                    font.pixelSize: Style.font.body
                     elide: Text.ElideRight
                   }
                 }
               }
-
               Text {
                 visible: timeline.count === 0
                 anchors.centerIn: parent
-                text: "Nothing recorded yet."
+                text: "Nothing to undo."
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
               }
             }
 
-            Rectangle {
-              width: 1
-              height: parent.height
-              color: root.border
-              opacity: 0.4
-            }
+            Rectangle { width: 1; height: parent.height; color: root.border; opacity: 0.4 }
 
             Column {
               width: parent.width - root.sidebarWidth - Style.spacing.md - 1
               height: parent.height
               spacing: Style.spacing.sm
 
+              Text {
+                width: parent.width
+                visible: !!root.selectedItem && !root.selectedIsConfig
+                text: root.selectedItem
+                  ? (root.selectedItem.class + (root.selectedItem.cwd ? ("\n" + root.selectedItem.cwd) : ""))
+                  : ""
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.Wrap
+              }
+
               Flow {
                 width: parent.width
+                visible: root.selectedIsConfig
                 spacing: Style.space(6)
                 Repeater {
                   model: root.selectedFiles
@@ -456,11 +419,11 @@ Item {
 
               Rectangle {
                 width: parent.width
-                height: parent.height - (root.selectedFiles.length ? Style.space(36) : 0) - (root.swatches.length ? Style.space(28) : 0) - Style.space(44) - Style.spacing.sm * 3
+                visible: root.selectedIsConfig
+                height: parent.height - Style.space(120)
                 radius: root.cornerRadius
                 color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.04)
                 clip: true
-
                 Flickable {
                   anchors.fill: parent
                   anchors.margins: Style.space(12)
@@ -469,7 +432,7 @@ Item {
                   clip: true
                   Text {
                     id: diffLabel
-                    text: root.diffText || (root.selectedPoint ? "No diff." : "")
+                    text: root.diffText || ""
                     color: root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -478,23 +441,25 @@ Item {
                 }
               }
 
+              Item { width: 1; height: 1; visible: !root.selectedIsConfig }
+
               Rectangle {
                 width: parent.width
                 height: Style.space(40)
                 radius: root.cornerRadius
-                color: root.selectedPoint ? root.accent : "transparent"
-                opacity: root.selectedPoint ? 1 : 0.3
+                color: root.selectedItem ? root.accent : "transparent"
+                opacity: root.selectedItem ? 1 : 0.3
                 Text {
                   anchors.centerIn: parent
                   text: "Restore this"
-                  color: root.selectedPoint ? root.background : root.dim
+                  color: root.selectedItem ? root.background : root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.body
                 }
                 MouseArea {
                   anchors.fill: parent
-                  enabled: !!root.selectedPoint && !root.restoring
-                  onClicked: root.requestRestore()
+                  enabled: !!root.selectedItem
+                  onClicked: root.confirmOpen = true
                 }
               }
             }

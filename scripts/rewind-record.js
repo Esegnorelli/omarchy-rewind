@@ -79,5 +79,8 @@ var rec = M.recordBurst(env(), {
   paths: paths,
   agentRunning: M.agentRunning(),
 })
+if (rec.recorded) {
+  M.pushAndSave(env(), M.configItemFromRecord(rec), M.readBootId())
+}
 process.stdout.write(JSON.stringify(rec) + "\n")
 process.exit(rec.recorded || !rec.error ? 0 : 1)

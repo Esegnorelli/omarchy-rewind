@@ -220,10 +220,261 @@ function filterPoints(points, query) {
   var i, p, blob
   for (i = 0; i < (points || []).length; i++) {
     p = points[i]
-    blob = (p.label + " " + p.summary + " " + (p.files || []).join(" ")).toLowerCase()
+    blob = [
+      p.label, p.summary, p.kind, p.class, p.title, p.cwd, p.configLabel,
+      (p.files || []).join(" "),
+    ].join(" ").toLowerCase()
     if (blob.indexOf(query) >= 0) out.push(p)
   }
   return out
+}
+
+var STACK_CAP = 50
+var SKIP_CLASSES = {
+  "xdg-desktop-portal-gtk": true,
+  "xdg-desktop-portal-hyprland": true,
+  "xdg-desktop-portal": true,
+  "polkit-gnome-authentication-agent-1": true,
+  "polkit": true,
+  "1Password": true,
+  "1password": true,
+  "omarchy-bar": true,
+}
+
+function normalizeAddr(a) {
+  a = String(a || "").trim()
+  if (a && a.indexOf("0x") !== 0 && /^[0-9a-fA-F]+$/.test(a)) return "0x" + a
+  return a
+}
+
+function parseHyprEvent(line) {
+  line = String(line || "").replace(/\r?\n$/, "")
+  var i = line.indexOf(">>")
+  if (i < 0) return null
+  var name = line.slice(0, i)
+  var data = line.slice(i + 2)
+  if (name === "closewindow") return { name: name, address: normalizeAddr(data) }
+  if (name === "openwindow") {
+    var parts = data.split(",")
+    return {
+      name: name,
+      address: normalizeAddr(parts[0] || ""),
+      workspace: parts[1] || "",
+      class: parts[2] || "",
+      title: parts.slice(3).join(","),
+    }
+  }
+  if (name === "activewindow" || name === "activewindowv2") {
+    return { name: name, address: normalizeAddr(String(data).split(",")[0] || "") }
+  }
+  return { name: name, data: data }
+}
+
+function shouldSkipWindow(win) {
+  var c = String((win && win.class) || "")
+  if (!c) return true
+  if (SKIP_CLASSES[c]) return true
+  if (c.indexOf("omarchy-") === 0) return true
+  if (c.indexOf("xdg-desktop-portal") === 0) return true
+  return false
+}
+
+function parseCmdline(buf) {
+  return String(buf || "").split("\0").filter(function (s) { return s.length > 0 })
+}
+
+function isTerminalClass(c) {
+  c = String(c || "").toLowerCase()
+  return c.indexOf("ghostty") >= 0 || c.indexOf("alacritty") >= 0 ||
+    c.indexOf("kitty") >= 0 || c.indexOf("foot") >= 0 || c.indexOf("wezterm") >= 0
+}
+
+function terminalCwdArgs(cls, cwd) {
+  if (!cwd) return []
+  var c = String(cls || "").toLowerCase()
+  if (c.indexOf("ghostty") >= 0) return ["--working-directory=" + cwd]
+  if (c.indexOf("alacritty") >= 0) return ["--working-directory", cwd]
+  if (c.indexOf("kitty") >= 0) return ["--directory", cwd]
+  if (c.indexOf("foot") >= 0) return ["-D", cwd]
+  if (c.indexOf("wezterm") >= 0) return ["start", "--cwd", cwd]
+  return []
+}
+
+function prettyClass(c) {
+  var parts = String(c || "").split(".")
+  var last = parts[parts.length - 1] || "Window"
+  if (!last) return "Window"
+  return last.charAt(0).toUpperCase() + last.slice(1)
+}
+
+function windowLabel(item) {
+  var name = prettyClass(item && item.class)
+  var cwd = String((item && item.cwd) || "")
+  var leaf = cwd.split("/").filter(Boolean).pop() || ""
+  if (leaf && isTerminalClass(item.class)) return name + " · " + leaf
+  return name
+}
+
+function shellQuote(s) {
+  return "'" + String(s).replace(/'/g, "'\\''") + "'"
+}
+
+function hyprExecSpec(item) {
+  var args = (item.cmdline && item.cmdline.length) ? item.cmdline.slice() : []
+  var extra = terminalCwdArgs(item.class, item.cwd)
+  var joined = args.join(" ")
+  var i
+  var already = false
+  for (i = 0; i < extra.length; i++) {
+    if (joined.indexOf(extra[i]) >= 0) { already = true; break }
+  }
+  if (!already) args = args.concat(extra)
+  if (!args.length) args = item.class ? [item.class] : []
+  var ws = Number(item.workspace)
+  if (!isFinite(ws) || ws < 1) ws = 1
+  return "[workspace " + ws + " silent] " + args.map(shellQuote).join(" ")
+}
+
+function pushItem(stack, item) {
+  var next = [item].concat(stack || [])
+  if (next.length > STACK_CAP) next = next.slice(0, STACK_CAP)
+  return next
+}
+
+function popItem(stack) {
+  stack = (stack || []).slice()
+  var item = stack.shift() || null
+  return { item: item, stack: stack }
+}
+
+function removeAt(stack, index) {
+  stack = (stack || []).slice()
+  if (index < 0 || index >= stack.length) return { item: null, stack: stack }
+  var item = stack[index]
+  stack.splice(index, 1)
+  return { item: item, stack: stack }
+}
+
+function loadStack(saved, bootId) {
+  if (!saved || saved.bootId !== bootId) return []
+  return saved.items || []
+}
+
+function loadStackState(raw, bootId) {
+  var data = raw
+  if (typeof raw === "string") {
+    try { data = JSON.parse(raw) } catch (e) { data = null }
+  }
+  if (!data || data.bootId !== bootId) return { bootId: bootId || "", items: [] }
+  return { bootId: bootId, items: data.items || [] }
+}
+
+function configItemFromRecord(rec, now) {
+  rec = rec || {}
+  var files = rec.files || []
+  return {
+    kind: "config",
+    ts: now || Date.now(),
+    commitId: rec.id || "",
+    files: files,
+    configLabel: rec.label || "you",
+    label: summaryLine(rec.label || "you", files) || "config",
+  }
+}
+
+function itemFromClient(c, now, proc) {
+  c = c || {}
+  proc = proc || {}
+  var ws = c.workspace
+  var wsid = ws && typeof ws === "object" ? ws.id : ws
+  var item = {
+    kind: "window",
+    ts: now || Date.now(),
+    address: normalizeAddr(c.address),
+    class: c.class || c.initialClass || "",
+    title: c.title || "",
+    workspace: Number(wsid) || 1,
+    floating: !!c.floating,
+    cmdline: proc.cmdline || [],
+    cwd: proc.cwd || "",
+  }
+  item.label = windowLabel(item)
+  return item
+}
+
+function superZTaken(text) {
+  text = String(text || "")
+  if (text.indexOf("-- esegnorelli.undo") >= 0) return false
+  return /o\.bind\(\s*"SUPER \+ Z"/i.test(text)
+}
+
+function bindBlock() {
+  return [
+    "-- esegnorelli.undo",
+    'o.bind("SUPER + Z", "Undo", "omarchy-shell esegnorelli.undo undo")',
+    'o.bind("SUPER + SHIFT + Z", "Undo history", "omarchy-shell shell toggle esegnorelli.undo")',
+    "",
+  ].join("\n")
+}
+
+function mergeBinds(text) {
+  text = String(text || "")
+  if (text.indexOf("-- esegnorelli.undo") >= 0) return text
+  if (superZTaken(text)) return text
+  if (text && text.slice(-1) !== "\n") text += "\n"
+  return text + "\n" + bindBlock()
+}
+
+function readBootId() {
+  try { return fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() }
+  catch (e) { return "unknown" }
+}
+
+function readProc(pid) {
+  var cmdline = []
+  var cwd = ""
+  try { cmdline = parseCmdline(fs.readFileSync("/proc/" + pid + "/cmdline")) } catch (e) {}
+  try { cwd = fs.readlinkSync("/proc/" + pid + "/cwd") } catch (e) {}
+  return { cmdline: cmdline, cwd: cwd }
+}
+
+function stackFile(env) {
+  return path.join(env.stateDir, "undo-stack.json")
+}
+
+function readStackFile(env, bootId) {
+  var raw = ""
+  try { raw = fs.readFileSync(stackFile(env), "utf8") } catch (e) {}
+  return loadStackState(raw || "{}", bootId)
+}
+
+function writeStackFile(env, state) {
+  fs.mkdirSync(env.stateDir, { recursive: true })
+  fs.writeFileSync(stackFile(env), JSON.stringify(state, null, 2) + "\n")
+}
+
+function pushAndSave(env, item, bootId) {
+  var st = readStackFile(env, bootId)
+  st.bootId = bootId
+  st.items = pushItem(st.items, item)
+  writeStackFile(env, st)
+  return st
+}
+
+function popAndSave(env, bootId) {
+  var st = readStackFile(env, bootId)
+  var popped = popItem(st.items)
+  st.items = popped.stack
+  writeStackFile(env, st)
+  return { item: popped.item, state: st }
+}
+
+function removeAtAndSave(env, index, bootId) {
+  var st = readStackFile(env, bootId)
+  var popped = removeAt(st.items, index)
+  st.items = popped.stack
+  writeStackFile(env, st)
+  return { item: popped.item, state: st }
 }
 
 function pruneIds(points, capBytes, keep) {
@@ -685,5 +936,31 @@ if (typeof module !== "undefined") {
     envFromHome: envFromHome,
     agentRunning: agentRunning,
     assembleStatus: assembleStatus,
+    STACK_CAP: STACK_CAP,
+    parseHyprEvent: parseHyprEvent,
+    shouldSkipWindow: shouldSkipWindow,
+    parseCmdline: parseCmdline,
+    terminalCwdArgs: terminalCwdArgs,
+    windowLabel: windowLabel,
+    hyprExecSpec: hyprExecSpec,
+    pushItem: pushItem,
+    popItem: popItem,
+    removeAt: removeAt,
+    loadStack: loadStack,
+    loadStackState: loadStackState,
+    configItemFromRecord: configItemFromRecord,
+    itemFromClient: itemFromClient,
+    superZTaken: superZTaken,
+    bindBlock: bindBlock,
+    mergeBinds: mergeBinds,
+    readBootId: readBootId,
+    readProc: readProc,
+    readStackFile: readStackFile,
+    writeStackFile: writeStackFile,
+    pushAndSave: pushAndSave,
+    popAndSave: popAndSave,
+    removeAtAndSave: removeAtAndSave,
+    isTerminalClass: isTerminalClass,
+    normalizeAddr: normalizeAddr,
   }
 }

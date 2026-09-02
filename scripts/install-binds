@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+export PATH="${HOME}/.local/share/mise/shims:${HOME}/.local/bin:/usr/bin:${PATH}"
+NODE="$(command -v node || true)"
+[[ -n ${NODE} ]] || { echo "install-binds: node not found" >&2; exit 1; }
+exec "$NODE" "$ROOT/scripts/install-binds.js" "$@"

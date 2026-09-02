@@ -1,19 +1,19 @@
 {
   "schemaVersion": 1,
-  "id": "esegnorelli.rewind",
-  "name": "Rewind",
+  "id": "esegnorelli.undo",
+  "name": "Undo",
   "version": "1.0.0",
   "author": "Esegnorelli",
   "license": "MIT",
-  "description": "Undo for Omarchy config. An agent breaks the bar, one click puts it back.",
+  "description": "Super+Z for the Omarchy desktop. Closed windows and config bursts come back.",
   "homepage": "https://github.com/Esegnorelli/omarchy-rewind",
   "repository": "https://github.com/Esegnorelli/omarchy-rewind",
   "keywords": [
     "undo",
-    "config",
     "hyprland",
-    "agents",
-    "timeline"
+    "windows",
+    "config",
+    "agents"
   ],
   "kinds": [
     "service",
@@ -27,8 +27,8 @@
     "overlay": "Overlay.qml"
   },
   "barWidget": {
-    "displayName": "Rewind",
-    "description": "Undo the last config change",
+    "displayName": "Undo",
+    "description": "Undo the last closed window or config change",
     "category": "System",
     "allowMultiple": false,
     "defaultSection": "right"
