@@ -56,7 +56,7 @@ var spec = M.hyprExecSpec(item)
 var hasCmd = item.cmdline && item.cmdline.length
 var r
 if (hasCmd) {
-  r = run("hyprctl", ["dispatch", "exec", spec])
+  r = run("hyprctl", ["dispatch", M.hyprDispatchArg(spec)])
   if (r.status === 0) {
     process.stdout.write(JSON.stringify({ ok: true, kind: "window", label: item.label }) + "\n")
     process.exit(0)

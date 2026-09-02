@@ -332,7 +332,12 @@ function hyprExecSpec(item) {
   if (!args.length) args = item.class ? [item.class] : []
   var ws = Number(item.workspace)
   if (!isFinite(ws) || ws < 1) ws = 1
-  return "[workspace " + ws + " silent] " + args.map(shellQuote).join(" ")
+  return "[workspace " + ws + " silent] uwsm-app -- " + args.map(shellQuote).join(" ")
+}
+
+function hyprDispatchArg(spec) {
+  var inner = String(spec || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+  return 'hl.dsp.exec_cmd("' + inner + '")'
 }
 
 function pushItem(stack, item) {
@@ -943,6 +948,7 @@ if (typeof module !== "undefined") {
     terminalCwdArgs: terminalCwdArgs,
     windowLabel: windowLabel,
     hyprExecSpec: hyprExecSpec,
+    hyprDispatchArg: hyprDispatchArg,
     pushItem: pushItem,
     popItem: popItem,
     removeAt: removeAt,

@@ -218,6 +218,8 @@ var spec = M.hyprExecSpec(wItem)
 assert("hypr workspace prefix", spec.indexOf("[workspace 3 silent]") === 0)
 assert("hypr has ghostty", spec.indexOf("ghostty") >= 0)
 assert("hypr has cwd", spec.indexOf("working-directory") >= 0)
+assert("hypr uses uwsm", spec.indexOf("uwsm-app") >= 0)
+assert("dispatch lua", M.hyprDispatchArg(spec).indexOf("hl.dsp.exec_cmd") === 0)
 
 var stack = []
 stack = M.pushItem(stack, { kind: "window", label: "A", ts: 1 })

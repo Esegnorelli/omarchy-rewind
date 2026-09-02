@@ -20,4 +20,5 @@ if (next === raw) {
   process.exit(0)
 }
 fs.writeFileSync(file, next)
+child.spawnSync("hyprctl", ["reload"])
 process.stdout.write("written\n")
