@@ -10,32 +10,25 @@ BarWidget {
   readonly property string topLabel: undoService ? String(undoService.topLabel || "") : ""
   readonly property bool recording: undoService ? undoService.recording === true : false
   readonly property bool bindTaken: undoService ? undoService.bindTaken === true : false
-  readonly property string shortLabel: {
-    var s = topLabel
-    if (s.length > 18) s = s.slice(0, 17) + "…"
-    return s
-  }
+  readonly property int stackCount: undoService && undoService.items ? undoService.items.length : 0
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  WidgetButton {
+  BarIconButton {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: shortLabel !== "" ? ("\uf0e2 " + shortLabel) : "\uf0e2"
-    active: shortLabel !== ""
+    text: "\uf0e2"
+    slotSize: Style.bar.statusSlot
+    fontSize: Style.font.caption
+    active: stackCount > 0
     opacity: root.recording ? 1 : 0.45
     tooltipText: root.bindTaken
       ? "SUPER+Z is taken"
-      : (shortLabel !== "" ? ("Undo " + topLabel) : "Nothing to undo")
-    onPressed: function (mouseButton) {
+      : (topLabel !== "" ? ("Undo " + topLabel) : "Undo — close a window, then Super+Z")
+    onPressed: {
       if (!root.bar) return
-      if (mouseButton === Qt.MiddleButton) return
-      if (mouseButton === Qt.RightButton) {
-        root.bar.run("omarchy-shell shell toggle esegnorelli.undo")
-        return
-      }
       root.bar.run("omarchy-shell esegnorelli.undo undo")
     }
   }

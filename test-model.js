@@ -187,6 +187,8 @@ fs.rmSync(root, { recursive: true, force: true })
 
 var ev = M.parseHyprEvent("closewindow>>0x560bdcbe6460")
 assert("parse closewindow", ev.name === "closewindow" && ev.address === "0x560bdcbe6460")
+var evBare = M.parseHyprEvent("closewindow>>560bde267be0")
+assert("parse closewindow bare hex", evBare.address === "0x560bde267be0")
 var evOpen = M.parseHyprEvent("openwindow>>0xabc,2,com.mitchellh.ghostty,casa: hdp")
 assert("parse openwindow class", evOpen.name === "openwindow" && evOpen.class === "com.mitchellh.ghostty")
 assert("parse openwindow title", evOpen.title === "casa: hdp" && evOpen.workspace === "2")

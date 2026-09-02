@@ -6,6 +6,13 @@ var M = require("../Model.js")
 var env = M.envFromHome(process.env.HOME)
 var bootId = M.readBootId()
 var cache = {}
+var logFile = (process.env.XDG_STATE_HOME || env.home + "/.local/state") + "/omarchy/undo-hypr.log"
+
+function log(msg) {
+  try {
+    fs.appendFileSync(logFile, new Date().toISOString() + " " + msg + "\n")
+  } catch (e) {}
+}
 
 function socketPath() {
   var runtime = process.env.XDG_RUNTIME_DIR || ("/run/user/" + process.getuid())
@@ -26,26 +33,32 @@ function refreshCache() {
   var r = child.spawnSync("hyprctl", ["clients", "-j"], { encoding: "utf8" })
   var clients = []
   try { clients = JSON.parse(r.stdout || "[]") } catch (e) { return }
-  var i, c, addr, proc
+  var i, c, addr, proc, entry
   for (i = 0; i < clients.length; i++) {
     c = clients[i]
     addr = M.normalizeAddr(c.address)
     proc = c.pid ? M.readProc(c.pid) : { cmdline: [], cwd: "" }
-    cache[addr] = { client: c, proc: proc }
+    entry = { client: c, proc: proc }
+    cache[addr] = entry
+    if (addr.indexOf("0x") === 0) cache[addr.slice(2)] = entry
   }
 }
 
 function onClose(address) {
-  var hit = cache[address]
+  var hit = cache[address] || cache[M.normalizeAddr(address)]
   if (!hit) {
-    refreshCache()
-    hit = cache[address]
+    log("close miss " + address + " cache=" + Object.keys(cache).length)
+    return
   }
-  if (!hit) return
   delete cache[address]
+  delete cache[M.normalizeAddr(address)]
   var item = M.itemFromClient(hit.client, Date.now(), hit.proc)
-  if (M.shouldSkipWindow(item)) return
+  if (M.shouldSkipWindow(item)) {
+    log("close skip " + item.class)
+    return
+  }
   M.pushAndSave(env, item, bootId)
+  log("close save " + item.label + " " + item.class)
 }
 
 function handleLine(line) {
@@ -65,8 +78,11 @@ if (!sock) {
 }
 
 refreshCache()
+M.writeStackFile(env, M.readStackFile(env, bootId))
+log("start sock=" + sock + " cache=" + Object.keys(cache).length)
+setInterval(refreshCache, 2000).unref()
 var buf = ""
-var conn = net.createConnection(sock)
+var conn = net.createConnection({ path: sock })
 conn.setEncoding("utf8")
 conn.on("data", function (chunk) {
   buf += chunk

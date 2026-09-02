@@ -10,7 +10,9 @@ function run(bin, args) {
 }
 
 function notify(title, body) {
-  var args = [title]
+  var msg = body ? title + " — " + body : title
+  run("omarchy", ["osd", "-m", msg, "-d", "1800"])
+  var args = ["-u", "normal", "-g", "󰕍", title]
   if (body) args.push(body)
   run("omarchy-notification-send", args)
 }
